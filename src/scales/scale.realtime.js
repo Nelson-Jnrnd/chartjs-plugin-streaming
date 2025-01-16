@@ -1,7 +1,7 @@
-import {defaults, TimeScale} from 'chart.js';
-import {_lookup, callback as call, each, isArray, isFinite, isNumber, noop, clipArea, unclipArea} from 'chart.js/helpers';
-import {resolveOption, startFrameRefreshTimer, stopFrameRefreshTimer, startDataRefreshTimer, stopDataRefreshTimer} from '../helpers/helpers.streaming';
-import {getElements} from '../plugins/plugin.annotation';
+import { defaults, TimeScale } from 'chart.js';
+import { _lookup, callback as call, each, isArray, isFinite, isNumber, noop, clipArea, unclipArea } from 'chart.js/helpers';
+import { resolveOption, startFrameRefreshTimer, stopFrameRefreshTimer, startDataRefreshTimer, stopDataRefreshTimer, SimulatedTime } from '../helpers/helpers.streaming';
+import { getElements } from '../plugins/plugin.annotation';
 
 // Ported from Chart.js 2.8.0 35273ee.
 const INTERVALS = {
@@ -57,7 +57,7 @@ const UNITS = Object.keys(INTERVALS);
 // Ported from Chart.js 2.8.0 35273ee.
 function determineStepSize(min, max, unit, capacity) {
   const range = max - min;
-  const {size: milliseconds, steps} = INTERVALS[unit];
+  const { size: milliseconds, steps } = INTERVALS[unit];
   let factor;
 
   if (!steps) {
@@ -80,7 +80,7 @@ function determineUnitForAutoTicks(minUnit, min, max, capacity) {
   const ilen = UNITS.length;
 
   for (let i = UNITS.indexOf(minUnit); i < ilen - 1; ++i) {
-    const {common, size, steps} = INTERVALS[UNITS[i]];
+    const { common, size, steps } = INTERVALS[UNITS[i]];
     const factor = steps ? steps[steps.length - 1] : Number.MAX_SAFE_INTEGER;
 
     if (common && Math.ceil(range / (factor * size)) <= capacity) {
@@ -105,7 +105,7 @@ function addTick(ticks, time, timestamps) {
   if (!timestamps) {
     ticks[time] = true;
   } else if (timestamps.length) {
-    const {lo, hi} = _lookup(timestamps, time);
+    const { lo, hi } = _lookup(timestamps, time);
     const timestamp = timestamps[lo] >= time ? timestamps[lo] : timestamps[hi];
     ticks[timestamp] = true;
   }
@@ -137,12 +137,12 @@ const datasetPropertyKeys = [
 ];
 
 function clean(scale) {
-  const {chart, id, max} = scale;
+  const { chart, id, max } = scale;
   const duration = resolveOption(scale, 'duration');
   const delay = resolveOption(scale, 'delay');
   const ttl = resolveOption(scale, 'ttl');
   const pause = resolveOption(scale, 'pause');
-  const min = Date.now() - (isNaN(ttl) ? duration + delay : ttl);
+  const min = scale.$realtime.simulatedTime.now() - (isNaN(ttl) ? duration + delay : ttl);
   let i, start, count, removalRange;
 
   // Remove old data
@@ -234,12 +234,12 @@ function transition(element, id, translate) {
 }
 
 function scroll(scale) {
-  const {chart, id, $realtime: realtime} = scale;
+  const { chart, id, $realtime: realtime } = scale;
   const duration = resolveOption(scale, 'duration');
   const delay = resolveOption(scale, 'delay');
   const isHorizontal = scale.isHorizontal();
   const length = isHorizontal ? scale.width : scale.height;
-  const now = Date.now();
+  const now = realtime.simulatedTime.now();
   const tooltip = chart.tooltip;
   const annotations = getElements(chart);
   let offset = length * (now - realtime.head) / duration;
@@ -251,7 +251,7 @@ function scroll(scale) {
   // Shift all the elements leftward or downward
   each(chart.data.datasets, (dataset, datasetIndex) => {
     const meta = chart.getDatasetMeta(datasetIndex);
-    const {data: elements = [], dataset: element} = meta;
+    const { data: elements = [], dataset: element } = meta;
 
     for (let i = 0, ilen = elements.length; i < ilen; ++i) {
       transition(elements[i], id, offset);
@@ -283,6 +283,8 @@ export default class RealTimeScale extends TimeScale {
   constructor(props) {
     super(props);
     this.$realtime = this.$realtime || {};
+
+    this.$realtime.simulatedTime = null;
   }
 
   init(scaleOpts, opts) {
@@ -300,18 +302,37 @@ export default class RealTimeScale extends TimeScale {
     });
   }
 
+  updateClock() {
+    const me = this;
+    const { $realtime: realtime, options } = me;
+    const { startTime, speed } = options.realtime;
+
+    if (realtime.simulatedTime === null && isFinite(startTime) && isFinite(speed)) {
+      realtime.simulatedTime = new SimulatedTime(startTime, speed);
+    } else {
+      if (realtime.simulatedTime.startDate !== startTime && isFinite(startTime)) {
+        realtime.simulatedTime.setStartTime(startTime);
+      }
+      if (realtime.simulatedTime.speed !== speed && isFinite(speed)) {
+        realtime.simulatedTime.setSpeed(speed);
+      }
+    }
+  }
+
   update(maxWidth, maxHeight, margins) {
     const me = this;
-    const {$realtime: realtime, options} = me;
-    const {bounds, offset, ticks: ticksOpts} = options;
-    const {autoSkip, source, major: majorTicksOpts} = ticksOpts;
+    const { $realtime: realtime, options } = me;
+    const { bounds, offset, ticks: ticksOpts } = options;
+    const { autoSkip, source, major: majorTicksOpts } = ticksOpts;
     const majorEnabled = majorTicksOpts.enabled;
+
+    this.updateClock();
 
     if (resolveOption(me, 'pause')) {
       stopFrameRefreshTimer(realtime);
     } else {
       if (!realtime.frameRequestID) {
-        realtime.head = Date.now();
+        realtime.head = realtime.simulatedTime.now();
       }
       startFrameRefreshTimer(realtime, () => {
         const chart = me.chart;
@@ -392,7 +413,7 @@ export default class RealTimeScale extends TimeScale {
 
   draw(chartArea) {
     const me = this;
-    const {chart, ctx} = me;
+    const { chart, ctx } = me;
     const area = me.isHorizontal() ?
       {
         left: chartArea.left,
@@ -431,7 +452,7 @@ export default class RealTimeScale extends TimeScale {
     const max = me.$realtime.head - delay;
     const min = max - duration;
     const capacity = me._getLabelCapacity(min);
-    const {time: timeOpts, ticks: ticksOpts} = me.options;
+    const { time: timeOpts, ticks: ticksOpts } = me.options;
     const minor = timeOpts.unit || determineUnitForAutoTicks(timeOpts.minUnit, min, max, capacity);
     const major = determineMajorUnit(minor);
     const stepSize = timeOpts.stepSize || determineStepSize(min, max, minor, capacity);
@@ -492,7 +513,10 @@ RealTimeScale.defaults = {
     minUnit: 'millisecond',
     displayFormats: {}
   },
-  realtime: {},
+  realtime: {
+    startTime: Date.now(),
+    speed: 1,
+  },
   ticks: {
     autoSkip: false,
     source: 'auto',

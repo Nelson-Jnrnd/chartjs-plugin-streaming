@@ -83,3 +83,32 @@ export function startDataRefreshTimer(context, func, interval) {
     context.refreshInterval = interval || 0;
   }
 }
+
+export class SimulatedTime {
+  constructor(startDate = Date.now(), speed = 1) {
+    this.startDate = startDate; // Initial simulated start time
+    this.speed = speed;         // Speed multiplier (e.g., 2x, 0.5x)
+    this.offset = 0;            // Time offset in milliseconds
+    this.lastRealTime = Date.now(); // Last time the real `Date.now()` was recorded
+  }
+
+  now() {
+    // Calculate elapsed real time
+    const realElapsed = Date.now() - this.lastRealTime;
+    // Simulated elapsed time is real elapsed time * speed
+    this.offset += realElapsed * this.speed;
+    this.lastRealTime = Date.now(); // Update the last real-time check
+    return this.startDate + this.offset;
+  }
+
+  setSpeed(newSpeed) {
+    this.now(); // Update offset to current time
+    this.speed = newSpeed; // Change speed
+  }
+
+  setStartTime(newStartDate) {
+    this.startDate = newStartDate;
+    this.offset = 0; // Reset offset
+    this.lastRealTime = Date.now();
+  }
+}
